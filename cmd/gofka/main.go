@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"generic-gofka/internal/gofka/consumer"
+	"generic-gofka/internal/gofka/model"
 	"generic-gofka/internal/gofka/producer"
 	"github.com/gorilla/mux"
 	"log"
@@ -25,14 +27,27 @@ func main() {
 	producerService := producer.KafkaProducerService{SyncProducer: syncProducer}
 	producerController := producer.KafkaProducerController{Service: &producerService}
 
-	_, err = consumer.InitializeSyncConsumer(brokers, topics, groupID)
+	client, err := consumer.InitializeSyncConsumer(brokers, groupID)
 	if err != nil {
 		log.Fatal("Error initializing Kafka consumer: ", err)
 	}
 
+	messages := make(chan *model.KafkaMessage)
+	handler := consumer.Handler{Messages: messages}
+
+	go func() {
+		err := client.Consume(context.Background(), topics, handler)
+		if err != nil {
+			log.Printf("Error consuming topic %s: %v\n", topics, err)
+			return
+		}
+	}()
+
 	// create router
 	router := mux.NewRouter()
-	router.HandleFunc("/produce", producerController.Service.ProduceHandler)
+	router.HandleFunc("/produce", func(writer http.ResponseWriter, request *http.Request) {
+		producerController.Service.ProduceHandler(writer, request, messages)
+	})
 
 	// close producers and consumers elegantly
 	signalChannel := make(chan os.Signal, 1)
